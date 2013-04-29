@@ -1,0 +1,170 @@
+#!/usr/bin/python
+# The contents of this file are subject to the BitTorrent Open Source License
+# Version 1.1 (the License).  You may not copy or use this file, in either
+# source code or executable form, except in compliance with the License.  You
+# may obtain a copy of the License at 
+#http://web.archive.org/web/20080213154112/http://www.bittorrent.com/bittorrent-open-source-license
+#
+# Software distributed under the License is distributed on an AS IS basis,
+# WITHOUT WARRANTY OF ANY KIND, either express or implied.  See the License
+# for the specific language governing rights and limitations under the
+# License.
+
+#---bencode.py content below ---
+# The contents of this file are subject to the BitTorrent Open Source License
+# Version 1.1 (the License).  You may not copy or use this file, in either
+# source code or executable form, except in compliance with the License.  You
+# may obtain a copy of the License at http://www.bittorrent.com/license/.
+#
+# Software distributed under the License is distributed on an AS IS basis,
+# WITHOUT WARRANTY OF ANY KIND, either express or implied.  See the License
+# for the specific language governing rights and limitations under the
+# License.
+
+# Written by Petru Paler
+
+class BTFailure(Exception):
+    pass
+
+def decode_int(x, f):
+    f += 1
+    newf = x.index('e', f)
+    n = int(x[f:newf])
+    if x[f] == '-':
+        if x[f + 1] == '0':
+            raise ValueError
+    elif x[f] == '0' and newf != f+1:
+        raise ValueError
+    return (n, newf+1)
+
+def decode_string(x, f):
+    colon = x.index(':', f)
+    n = int(x[f:colon])
+    if x[f] == '0' and colon != f+1:
+        raise ValueError
+    colon += 1
+    return (x[colon:colon+n], colon+n)
+
+def decode_list(x, f):
+    r, f = [], f+1
+    while x[f] != 'e':
+        v, f = decode_func[x[f]](x, f)
+        r.append(v)
+    return (r, f + 1)
+
+def decode_dict(x, f):
+    r, f = {}, f+1
+    while x[f] != 'e':
+        k, f = decode_string(x, f)
+        r[k], f = decode_func[x[f]](x, f)
+    return (r, f + 1)
+
+decode_func = {}
+decode_func['l'] = decode_list
+decode_func['d'] = decode_dict
+decode_func['i'] = decode_int
+decode_func['0'] = decode_string
+decode_func['1'] = decode_string
+decode_func['2'] = decode_string
+decode_func['3'] = decode_string
+decode_func['4'] = decode_string
+decode_func['5'] = decode_string
+decode_func['6'] = decode_string
+decode_func['7'] = decode_string
+decode_func['8'] = decode_string
+decode_func['9'] = decode_string
+
+def bdecode(x):
+    try:
+        r, l = decode_func[x[0]](x, 0)
+    except (IndexError, KeyError, ValueError):
+        raise BTFailure("not a valid bencoded string")
+    if l != len(x):
+        raise BTFailure("invalid bencoded value (data after valid prefix)")
+    return r
+
+from types import StringType, IntType, LongType, DictType, ListType, TupleType
+
+
+#---bencode.py content above ----
+
+import sys, argparse,re,os
+
+def torrent_stats(data):
+    '''return (is_dir_here,file_numbers,file_total_size)'''
+    is_dirs=False
+    file_numbers=0
+    total_size=(len(data['info']['pieces'])/20)*int(data['info']['piece length']) #20 - 20-byte SHA1 for each piece in pieces
+    if 'files' in data['info']:
+        for f in data['info']['files']:
+            if len(f['path']) > 1:
+                is_dirs=True
+        file_numbers=len(data['info']['files'])
+    else:
+        file_numbers=1
+        is_dirs=False
+    return is_dirs,file_numbers,total_size
+
+def bad_file(quiet,filename):
+    if not quiet:
+        sys.stderr.write("%s\n"%filename)
+
+def filter_torrent(filename,quiet,dirs,number,size):
+    try:
+        filedata=bdecode(open(filename, 'rb').read()) 
+        d_stat,f_number,f_size=torrent_stats(filedata)
+        if (d_stat and dirs) or \
+           (number and number < f_number) or \
+           (size and size < f_size): 
+            bad_file(quiet,filename)
+        else:
+            sys.stdout.write("%s\n"%filename)
+    except:
+        bad_file(quiet,filename)
+
+def get_size(line):
+    try:
+        res=re.findall("^(\d+)((?:[KMGTPEZY])|(?:[kMGTPEZY]b))?$",line)[0]
+        scale={
+            "":1,
+            "K":1024,
+            "M":1024**2,
+            "G":1024**3,
+            "T":1024**4,
+            "P":1024**5,
+            "E":1024**6,
+            "Z":1024**7,
+            "Y":1024**8,
+            "kb":1000,
+            "mb":1000**2,
+            "gb":1000**3,
+            "tb":1000**4,
+            "pb":1000**5,
+            "eb":1000**6,
+            "zb":1000**7,
+            "yb":1000**8
+        }
+        return int(res[0])*scale[res[1]]
+    except:
+        sys.stderr.write("Bad size specificator\n")
+        sys.exit(-1)
+
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("-v", "--version", help="Print version", action="store_true")
+    parser.add_argument("-q", "--quiet", help="Quiet (do not print non-matching torrents to sterr)", action="store_true")
+    parser.add_argument("-D", "--nodirs", help="Skip torrent files with directories", action="store_true")
+    parser.add_argument("-N", "--number", help="Limit file number in each torrent file to specified value", type=int,default=0)
+    parser.add_argument("-S", "--size", help="Limit total pieces size (not file size!) inside each torrent to specified value (supports postfix: K,M,G,etc (in 1024) and kb,mb,gb,tb (in 1000)", default="0")
+    args=parser.parse_args()
+    if(args.version):
+        sys.stdout.write("filter_torrent v 0.1 (c) George Shuklin, 2013. BitTorrent Open Source License\n")
+    size=get_size(args.size)
+    for line in sys.stdin.readlines():
+        if len(line):
+            filter_torrent(line.strip(),args.quiet,args.nodirs,args.number,size)
+
+if __name__ == "__main__":
+    main()
+
